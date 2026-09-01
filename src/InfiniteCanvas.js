@@ -10,8 +10,8 @@ export class InfiniteCanvas {
 
     this._addRectangle({
       id: "rect-1",
-      x: 0,
-      y: 0,
+      x: 100,
+      y: 550,
       w: 100,
       h: 100,
       color: "#e74c3c",
@@ -26,13 +26,24 @@ export class InfiniteCanvas {
     });
     this._addRectangle({
       id: "rect-3",
-      x: -300,
-      y: -100,
+      x: 300,
+      y: 100,
       w: 120,
       h: 120,
       color: "#2ecc71",
     });
+
+    // this._generateRandomShapes(5000);
+
     this.draggingShape = null;
+
+    this.resizingShape = null;
+    this.resizeHandle = null;
+    this.resizeAnchor = null;
+
+    this.currentTool = null;
+    this.onToolChange = null;
+
     this.isPanning = false;
     this.lastMouse = { x: 0, y: 0 };
 
@@ -41,6 +52,15 @@ export class InfiniteCanvas {
 
     this._bindInput();
     this._loop();
+  }
+
+  setTool(tool) {
+    this._setCurrentTool(this.currentTool === tool ? null : tool);
+  }
+
+  _setCurrentTool(tool) {
+    this.currentTool = tool;
+    this.onToolChange?.(tool);
   }
 
   _addRectangle({ id, x, y, w, h, color, rotation = 0, selected = false }) {
@@ -75,6 +95,53 @@ export class InfiniteCanvas {
       const mouseY = e.clientY - rect.top;
 
       const worldPos = this.camera.screenToWorld(mouseX, mouseY);
+
+      if (this.currentTool) {
+        const w = 100;
+        const h = 100;
+        switch (this.currentTool) {
+          case "rectangle":
+            this._addRectangle({
+              id: `shape-${crypto.randomUUID()}`,
+              x: worldPos.x - w / 2,
+              y: worldPos.y - h / 2,
+              w,
+              h,
+              color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+            });
+            break;
+
+          case "circle":
+            // Implement circle creation logic here
+            break;
+        }
+
+        return;
+      }
+
+      const resizeHit = this._hitResizeHandle(worldPos.x, worldPos.y);
+      if (resizeHit) {
+        const { shape, handle } = resizeHit;
+        this.resizingShape = shape;
+        this.resizeHandle = handle;
+        switch (handle) {
+          case "bottom-right":
+            this.resizeAnchor = { x: shape.x, y: shape.y };
+            break;
+          case "bottom-left":
+            this.resizeAnchor = { x: shape.x + shape.w, y: shape.y };
+            break;
+          case "top-right":
+            this.resizeAnchor = { x: shape.x, y: shape.y + shape.h };
+            break;
+          case "top-left":
+            this.resizeAnchor = { x: shape.x + shape.w, y: shape.y + shape.h };
+            break;
+        }
+        this.lastMouse = { x: e.clientX, y: e.clientY };
+        return;
+      }
+
       const hit = this._hitTest(worldPos.x, worldPos.y);
 
       this._clearSelection();
@@ -105,6 +172,24 @@ export class InfiniteCanvas {
 
       this.lastMouse = { x: e.clientX, y: e.clientY };
 
+      if (this.resizingShape) {
+        const rect = this.canvas.getBoundingClientRect();
+
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const worldPos = this.camera.screenToWorld(mouseX, mouseY);
+
+        const shape = this.resizingShape;
+        const anchor = this.resizeAnchor;
+
+        shape.x = Math.min(worldPos.x, anchor.x);
+        shape.y = Math.min(worldPos.y, anchor.y);
+        shape.w = Math.abs(worldPos.x - anchor.x);
+        shape.h = Math.abs(worldPos.y - anchor.y);
+
+        return;
+      }
+
       if (this.draggingShape) {
         const worldDx = dx / this.camera.zoom;
         const worldDy = dy / this.camera.zoom;
@@ -126,12 +211,44 @@ export class InfiniteCanvas {
 
       if (this.isPanning) {
         this.camera.panByScreenDelta(dx, dy);
+        this.canvas.style.cursor = "grabbing";
+        return;
+      }
+
+      const rect = this.canvas.getBoundingClientRect();
+
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const worldPos = this.camera.screenToWorld(mouseX, mouseY);
+
+      const handle = this._hitResizeHandle(worldPos.x, worldPos.y)?.handle;
+
+      if (handle === "top-left" || handle === "bottom-right") {
+        this.canvas.style.cursor = "nwse-resize";
+      } else if (handle === "top-right" || handle === "bottom-left") {
+        this.canvas.style.cursor = "nesw-resize";
+      } else {
+        const hit = this._hitTest(worldPos.x, worldPos.y);
+        if (hit) {
+          this.canvas.style.cursor = "move";
+        } else {
+          this.canvas.style.cursor = "grab";
+        }
       }
     });
 
     window.addEventListener("mouseup", () => {
+
+      this._setCurrentTool(null);
+
       this.isPanning = false;
       this.draggingShape = null;
+      this.canvas.style.cursor = "grab";
+
+      this.resizingShape = null;
+      this.resizeHandle = null;
+      this.resizeAnchor = null;
 
       if (this.marqueeStart && this.marqueeEnd) {
         const minX = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
@@ -140,16 +257,7 @@ export class InfiniteCanvas {
         const maxY = Math.max(this.marqueeStart.y, this.marqueeEnd.y);
 
         for (const obj of this.objects.values()) {
-          const objMinX = obj.x;
-          const objMaxX = obj.x + obj.w;
-          const objMinY = obj.y;
-          const objMaxY = obj.y + obj.h;
-
-          const overlaps =
-            objMaxX >= minX &&
-            objMinX <= maxX &&
-            objMaxY >= minY &&
-            objMinY <= maxY;
+          const overlaps = this._inView(obj, { minX, maxX, minY, maxY });
 
           obj.selected = overlaps;
         }
@@ -177,7 +285,7 @@ export class InfiniteCanvas {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
 
       e.preventDefault();
-      
+
       for (const [id, obj] of this.objects) {
         if (obj.selected) {
           this.objects.delete(id);
@@ -189,12 +297,75 @@ export class InfiniteCanvas {
   _render() {
     const { ctx, canvas, camera } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    this._renderGrid();
+
+    const topLeft = camera.screenToWorld(0, 0);
+    const bottomRight = camera.screenToWorld(canvas.width, canvas.height);
+
+    const viewBounds = {
+      minX: Math.min(topLeft.x, bottomRight.x),
+      maxX: Math.max(topLeft.x, bottomRight.x),
+      minY: Math.min(topLeft.y, bottomRight.y),
+      maxY: Math.max(topLeft.y, bottomRight.y),
+    };
 
     for (const obj of this.objects.values()) {
+      const overlaps = this._inView(obj, viewBounds);
+      if (!overlaps) continue;
+
       this._renderShape(obj);
     }
 
     this._renderMarquee();
+  }
+
+  _renderGrid() {
+    const baseSpacing = 50;
+    const spacing = baseSpacing / this.camera.zoom;
+
+    const topLeft = this.camera.screenToWorld(0, 0);
+    const bottomRight = this.camera.screenToWorld(
+      this.canvas.width,
+      this.canvas.height,
+    );
+
+    const viewBounds = {
+      minX: Math.min(topLeft.x, bottomRight.x),
+      maxX: Math.max(topLeft.x, bottomRight.x),
+      minY: Math.min(topLeft.y, bottomRight.y),
+      maxY: Math.max(topLeft.y, bottomRight.y),
+    };
+
+    const { ctx, camera } = this;
+    ctx.save();
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+
+    // Vertical lines
+    const startX = Math.floor(viewBounds.minX / spacing) * spacing;
+    for (let x = startX; x <= viewBounds.maxX; x += spacing) {
+      const screenStart = camera.worldToScreen(x, viewBounds.minY);
+      const screenEnd = camera.worldToScreen(x, viewBounds.maxY);
+      ctx.beginPath();
+      ctx.moveTo(screenStart.x, screenStart.y);
+      ctx.lineTo(screenEnd.x, screenEnd.y);
+      ctx.stroke();
+    }
+
+    // Horizontal lines
+    const startY = Math.floor(viewBounds.minY / spacing) * spacing;
+
+    for (let y = startY; y <= viewBounds.maxY; y += spacing) {
+      const screenStart = camera.worldToScreen(viewBounds.minX, y);
+
+      const screenEnd = camera.worldToScreen(viewBounds.maxX, y);
+
+      ctx.beginPath();
+      ctx.moveTo(screenStart.x, screenStart.y);
+      ctx.lineTo(screenEnd.x, screenEnd.y);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _renderMarquee() {
@@ -220,6 +391,49 @@ export class InfiniteCanvas {
     ctx.strokeRect(x, y, w, h);
     ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
     ctx.fillRect(x, y, w, h);
+  }
+
+  _renderResizeHandles(obj) {
+    if (!obj.selected) return;
+
+    const { ctx, camera } = this;
+
+    const screenPos = camera.worldToScreen(obj.x, obj.y);
+
+    const screenW = obj.w * camera.zoom;
+    const screenH = obj.h * camera.zoom;
+
+    const handleSize = 8;
+
+    const handles = [
+      {
+        x: screenPos.x,
+        y: screenPos.y,
+      },
+      {
+        x: screenPos.x + screenW,
+        y: screenPos.y,
+      },
+      {
+        x: screenPos.x,
+        y: screenPos.y + screenH,
+      },
+      {
+        x: screenPos.x + screenW,
+        y: screenPos.y + screenH,
+      },
+    ];
+
+    ctx.fillStyle = "#ffffff";
+
+    for (const handle of handles) {
+      ctx.fillRect(
+        handle.x - handleSize / 2,
+        handle.y - handleSize / 2,
+        handleSize,
+        handleSize,
+      );
+    }
   }
 
   _renderShape(obj) {
@@ -248,12 +462,14 @@ export class InfiniteCanvas {
     if (obj.selected) {
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 2;
+
       ctx.strokeRect(
         screenPos.x - 2,
         screenPos.y - 2,
         screenW + 4,
         screenH + 4,
       );
+      this._renderResizeHandles(obj);
     }
 
     ctx.restore();
@@ -275,6 +491,72 @@ export class InfiniteCanvas {
     }
     return null;
   }
+
+  _hitResizeHandle(worldX, worldY) {
+    const handleSize = 8 / this.camera.zoom;
+
+    for (const obj of this.objects.values()) {
+      if (!obj.selected) continue;
+
+      const handles = {
+        "top-left": {
+          x: obj.x,
+          y: obj.y,
+        },
+        "top-right": {
+          x: obj.x + obj.w,
+          y: obj.y,
+        },
+        "bottom-left": {
+          x: obj.x,
+          y: obj.y + obj.h,
+        },
+        "bottom-right": {
+          x: obj.x + obj.w,
+          y: obj.y + obj.h,
+        },
+      };
+
+      for (const [handle, point] of Object.entries(handles)) {
+        if (
+          worldX >= point.x - handleSize &&
+          worldX <= point.x + handleSize &&
+          worldY >= point.y - handleSize &&
+          worldY <= point.y + handleSize
+        ) {
+          return { shape: obj, handle };
+        }
+      }
+    }
+    return null;
+  }
+
+  _inView(obj, viewBounds) {
+    const objMinX = obj.x;
+    const objMaxX = obj.x + obj.w;
+    const objMinY = obj.y;
+    const objMaxY = obj.y + obj.h;
+
+    return (
+      objMaxX >= viewBounds.minX &&
+      objMinX <= viewBounds.maxX &&
+      objMaxY >= viewBounds.minY &&
+      objMinY <= viewBounds.maxY
+    );
+  }
+
+  // _generateRandomShapes(count) {
+  //   for (let i = 0; i < count; i++) {
+  //     this._addRectangle({
+  //       id: `random-rect-${i}`,
+  //       x: Math.random() * 10000 - 5000,
+  //       y: Math.random() * 10000 - 5000,
+  //       w: Math.random() * 100 + 20,
+  //       h: Math.random() * 100 + 20,
+  //       color: `hsl(${Math.random() * 360}, 50%, 50%)`,
+  //     });
+  //   }
+  // }
 
   _loop() {
     this._render();
