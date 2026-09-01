@@ -89,6 +89,12 @@ export class InfiniteCanvas {
         return;
       }
 
+      if (e.shiftKey) {
+        this.marqueeStart = worldPos;
+        this.marqueeEnd = worldPos;
+        return;
+      }
+
       this.isPanning = true;
       this.lastMouse = { x: e.clientX, y: e.clientY };
     });
@@ -108,6 +114,16 @@ export class InfiniteCanvas {
         return;
       }
 
+      if (this.marqueeStart) {
+        const rect = this.canvas.getBoundingClientRect();
+
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const worldPos = this.camera.screenToWorld(mouseX, mouseY);
+        this.marqueeEnd = worldPos;
+        return;
+      }
+
       if (this.isPanning) {
         this.camera.panByScreenDelta(dx, dy);
       }
@@ -116,6 +132,31 @@ export class InfiniteCanvas {
     window.addEventListener("mouseup", () => {
       this.isPanning = false;
       this.draggingShape = null;
+
+      if (this.marqueeStart && this.marqueeEnd) {
+        const minX = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
+        const maxX = Math.max(this.marqueeStart.x, this.marqueeEnd.x);
+        const minY = Math.min(this.marqueeStart.y, this.marqueeEnd.y);
+        const maxY = Math.max(this.marqueeStart.y, this.marqueeEnd.y);
+
+        for (const obj of this.objects.values()) {
+          const objMinX = obj.x;
+          const objMaxX = obj.x + obj.w;
+          const objMinY = obj.y;
+          const objMaxY = obj.y + obj.h;
+
+          const overlaps =
+            objMaxX >= minX &&
+            objMinX <= maxX &&
+            objMaxY >= minY &&
+            objMinY <= maxY;
+
+          obj.selected = overlaps;
+        }
+      }
+
+      this.marqueeStart = null;
+      this.marqueeEnd = null;
     });
 
     this.canvas.addEventListener(
@@ -131,6 +172,18 @@ export class InfiniteCanvas {
       },
       { passive: false },
     );
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+
+      e.preventDefault();
+      
+      for (const [id, obj] of this.objects) {
+        if (obj.selected) {
+          this.objects.delete(id);
+        }
+      }
+    });
   }
 
   _render() {
@@ -140,6 +193,33 @@ export class InfiniteCanvas {
     for (const obj of this.objects.values()) {
       this._renderShape(obj);
     }
+
+    this._renderMarquee();
+  }
+
+  _renderMarquee() {
+    if (!this.marqueeStart || !this.marqueeEnd) return;
+
+    const { ctx, camera } = this;
+    const startScreen = camera.worldToScreen(
+      this.marqueeStart.x,
+      this.marqueeStart.y,
+    );
+    const endScreen = camera.worldToScreen(
+      this.marqueeEnd.x,
+      this.marqueeEnd.y,
+    );
+
+    const x = Math.min(startScreen.x, endScreen.x);
+    const y = Math.min(startScreen.y, endScreen.y);
+    const w = Math.abs(startScreen.x - endScreen.x);
+    const h = Math.abs(startScreen.y - endScreen.y);
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+    ctx.fillRect(x, y, w, h);
   }
 
   _renderShape(obj) {
