@@ -1,45 +1,28 @@
 import { Camera } from "./camera";
+import { DeleteCommand } from "./commands/DeleteCommand";
+import { HistoryManager } from "./commands/HistoryManager";
+import { CreateCommand } from "./commands/CreateCommand";
+import { ResizeCommand } from "./commands/ResizeCommand";
+import { MoveCommand } from "./commands/MoveCommand";
 
 export class InfiniteCanvas {
   constructor(canvasEl) {
     this.canvas = canvasEl;
     this.ctx = canvasEl.getContext("2d");
     this.camera = new Camera();
+    this.history = new HistoryManager();
 
     this.objects = new Map();
-
-    this._addRectangle({
-      id: "rect-1",
-      x: 100,
-      y: 550,
-      w: 100,
-      h: 100,
-      color: "#e74c3c",
-    });
-    this._addRectangle({
-      id: "rect-2",
-      x: 200,
-      y: 150,
-      w: 150,
-      h: 80,
-      color: "#3498db",
-    });
-    this._addRectangle({
-      id: "rect-3",
-      x: 300,
-      y: 100,
-      w: 120,
-      h: 120,
-      color: "#2ecc71",
-    });
 
     // this._generateRandomShapes(5000);
 
     this.draggingShape = null;
+    this.draggingStartPos = null;
 
     this.resizingShape = null;
     this.resizeHandle = null;
     this.resizeAnchor = null;
+    this.resizeStartBounds = null;
 
     this.currentTool = null;
     this.onToolChange = null;
@@ -61,20 +44,6 @@ export class InfiniteCanvas {
   _setCurrentTool(tool) {
     this.currentTool = tool;
     this.onToolChange?.(tool);
-  }
-
-  _addRectangle({ id, x, y, w, h, color, rotation = 0, selected = false }) {
-    this.objects.set(id, {
-      id,
-      type: "rectangle",
-      x,
-      y,
-      w,
-      h,
-      color,
-      rotation,
-      selected,
-    });
   }
 
   _resize() {
@@ -100,16 +69,21 @@ export class InfiniteCanvas {
         const w = 100;
         const h = 100;
         switch (this.currentTool) {
-          case "rectangle":
-            this._addRectangle({
+          case "rectangle": {
+            const shape = {
               id: `shape-${crypto.randomUUID()}`,
+              type: "rectangle",
               x: worldPos.x - w / 2,
               y: worldPos.y - h / 2,
               w,
               h,
               color: `hsl(${Math.random() * 360}, 70%, 50%)`,
-            });
+              rotation: 0,
+              selected: false,
+            };
+            this.history.execute(new CreateCommand(this.objects, shape));
             break;
+          }
 
           case "circle":
             // Implement circle creation logic here
@@ -138,6 +112,12 @@ export class InfiniteCanvas {
             this.resizeAnchor = { x: shape.x + shape.w, y: shape.y + shape.h };
             break;
         }
+        this.resizeStartBounds = {
+          x: shape.x,
+          y: shape.y,
+          w: shape.w,
+          h: shape.h,
+        };
         this.lastMouse = { x: e.clientX, y: e.clientY };
         return;
       }
@@ -149,6 +129,9 @@ export class InfiniteCanvas {
       if (hit) {
         hit.selected = true;
         this.draggingShape = hit;
+
+        this.draggingStartPos = { x: hit.x, y: hit.y };
+
         this.lastMouse = {
           x: e.clientX,
           y: e.clientY,
@@ -239,16 +222,39 @@ export class InfiniteCanvas {
     });
 
     window.addEventListener("mouseup", () => {
-
       this._setCurrentTool(null);
 
       this.isPanning = false;
-      this.draggingShape = null;
       this.canvas.style.cursor = "grab";
 
+      if (this.draggingShape) {
+        const command = new MoveCommand(
+          this.draggingShape,
+          this.draggingStartPos,
+          { x: this.draggingShape.x, y: this.draggingShape.y },
+        );
+        this.history.execute(command);
+      }
+
+      if (this.resizingShape) {
+        const command = new ResizeCommand(
+          this.resizingShape,
+          { x: this.resizeStartBounds.x, y: this.resizeStartBounds.y },
+          { x: this.resizingShape.x, y: this.resizingShape.y },
+          this.resizeStartBounds.w,
+          this.resizeStartBounds.h,
+          this.resizingShape.w,
+          this.resizingShape.h,
+        );
+        this.history.execute(command);
+      }
+
+      this.draggingShape = null;
+      this.draggingStartPos = null;
       this.resizingShape = null;
       this.resizeHandle = null;
       this.resizeAnchor = null;
+      this.resizeStartBounds = null;
 
       if (this.marqueeStart && this.marqueeEnd) {
         const minX = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
@@ -288,8 +294,20 @@ export class InfiniteCanvas {
 
       for (const [id, obj] of this.objects) {
         if (obj.selected) {
-          this.objects.delete(id);
+          this.history.execute(new DeleteCommand(this.objects, obj));
         }
+      }
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.ctrlKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        this.history.undo();
+      }
+
+      if (e.ctrlKey && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        this.history.redo();
       }
     });
   }
@@ -547,14 +565,18 @@ export class InfiniteCanvas {
 
   // _generateRandomShapes(count) {
   //   for (let i = 0; i < count; i++) {
-  //     this._addRectangle({
-  //       id: `random-rect-${i}`,
-  //       x: Math.random() * 10000 - 5000,
-  //       y: Math.random() * 10000 - 5000,
+  //     const shape = {
+  //       id: `shape-${crypto.randomUUID()}`,
+  //       type: "rectangle",
+  //       x: Math.random() * 2000 - 1000,
+  //       y: Math.random() * 2000 - 1000,
   //       w: Math.random() * 100 + 20,
   //       h: Math.random() * 100 + 20,
-  //       color: `hsl(${Math.random() * 360}, 50%, 50%)`,
-  //     });
+  //       color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+  //       rotation: 0,
+  //       selected: false,
+  //     };
+  //     this.objects.set(shape.id, shape);
   //   }
   // }
 
