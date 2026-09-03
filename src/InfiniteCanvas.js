@@ -11,8 +11,10 @@ export class InfiniteCanvas {
     this.ctx = canvasEl.getContext("2d");
     this.camera = new Camera();
     this.history = new HistoryManager();
+    this.history.onChange = () => this._saveToStorage();
 
     this.objects = new Map();
+    this._loadFromStorage();
 
     // this._generateRandomShapes(5000);
 
@@ -226,6 +228,7 @@ export class InfiniteCanvas {
 
       this.isPanning = false;
       this.canvas.style.cursor = "grab";
+      this._saveCameraDebounced();
 
       if (this.draggingShape) {
         const command = new MoveCommand(
@@ -283,6 +286,7 @@ export class InfiniteCanvas {
 
         const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
         this.camera.zoomAt(mouseX, mouseY, zoomFactor);
+        this._saveCameraDebounced();
       },
       { passive: false },
     );
@@ -563,6 +567,47 @@ export class InfiniteCanvas {
     );
   }
 
+  _saveToStorage() {
+    const entries = Array.from(this.objects.entries());
+    localStorage.setItem("infinite-canvas-data", JSON.stringify(entries));
+
+    const cameraState = {
+      x: this.camera.x,
+      y: this.camera.y,
+      zoom: this.camera.zoom,
+    };
+    localStorage.setItem("infinite-canvas-camera", JSON.stringify(cameraState));
+  }
+
+  _loadFromStorage() {
+    const raw = localStorage.getItem("infinite-canvas-data");
+    if (raw) {
+      const entries = JSON.parse(raw);
+      this.objects = new Map(entries);
+    }
+    const rawCamera = localStorage.getItem("infinite-canvas-camera");
+    if (rawCamera) {
+      const cameraState = JSON.parse(rawCamera);
+      this.camera.x = cameraState.x;
+      this.camera.y = cameraState.y;
+      this.camera.zoom = cameraState.zoom;
+    }
+  }
+
+  _saveCameraDebounced() {
+    clearTimeout(this._cameraSaveTimer);
+    this._cameraSaveTimer = setTimeout(() => {
+      const cameraState = {
+        x: this.camera.x,
+        y: this.camera.y,
+        zoom: this.camera.zoom,
+      };
+      localStorage.setItem(
+        "infinite-canvas-camera",
+        JSON.stringify(cameraState),
+      );
+    }, 300);
+  }
   // _generateRandomShapes(count) {
   //   for (let i = 0; i < count; i++) {
   //     const shape = {
