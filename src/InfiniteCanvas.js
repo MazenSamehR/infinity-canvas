@@ -26,6 +26,8 @@ export class InfiniteCanvas {
     this.resizeAnchor = null;
     this.resizeStartBounds = null;
 
+    this.rotatingShape = null;
+
     this.currentTool = null;
     this.onToolChange = null;
 
@@ -67,6 +69,13 @@ export class InfiniteCanvas {
 
       const worldPos = this.camera.screenToWorld(mouseX, mouseY);
 
+      const rotationShape = this._hitRotationHandle(worldPos.x, worldPos.y);
+
+      if (rotationShape) {
+        this.rotatingShape = rotationShape;
+        return;
+      }
+
       if (this.currentTool) {
         const w = 100;
         const h = 100;
@@ -87,9 +96,22 @@ export class InfiniteCanvas {
             break;
           }
 
-          case "circle":
-            // Implement circle creation logic here
+          case "circle": {
+            const size = 100;
+            const shape = {
+              id: `shape-${crypto.randomUUID()}`,
+              type: "circle",
+              x: worldPos.x - size / 2,
+              y: worldPos.y - size / 2,
+              w: size,
+              h: size,
+              color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+              rotation: 0,
+              selected: false,
+            };
+            this.history.execute(new CreateCommand(this.objects, shape));
             break;
+          }
         }
 
         return;
@@ -157,6 +179,27 @@ export class InfiniteCanvas {
 
       this.lastMouse = { x: e.clientX, y: e.clientY };
 
+      if (this.rotatingShape) {
+        const rect = this.canvas.getBoundingClientRect();
+
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const worldPos = this.camera.screenToWorld(mouseX, mouseY);
+
+        const shape = this.rotatingShape;
+
+        const centerX = shape.x + shape.w / 2;
+        const centerY = shape.y + shape.h / 2;
+
+        const dx = worldPos.x - centerX;
+        const dy = worldPos.y - centerY;
+
+        shape.rotation = Math.atan2(dy, dx) + Math.PI / 2;
+
+        return;
+      }
+
       if (this.resizingShape) {
         const rect = this.canvas.getBoundingClientRect();
 
@@ -167,10 +210,21 @@ export class InfiniteCanvas {
         const shape = this.resizingShape;
         const anchor = this.resizeAnchor;
 
-        shape.x = Math.min(worldPos.x, anchor.x);
-        shape.y = Math.min(worldPos.y, anchor.y);
-        shape.w = Math.abs(worldPos.x - anchor.x);
-        shape.h = Math.abs(worldPos.y - anchor.y);
+        if (shape.type === "circle") {
+          const width = Math.abs(worldPos.x - anchor.x);
+          const height = Math.abs(worldPos.y - anchor.y);
+          const size = Math.max(width, height);
+
+          shape.w = size;
+          shape.h = size;
+          shape.x = worldPos.x < anchor.x ? anchor.x - size : anchor.x;
+          shape.y = worldPos.y < anchor.y ? anchor.y - size : anchor.y;
+        } else {
+          shape.x = Math.min(worldPos.x, anchor.x);
+          shape.y = Math.min(worldPos.y, anchor.y);
+          shape.w = Math.abs(worldPos.x - anchor.x);
+          shape.h = Math.abs(worldPos.y - anchor.y);
+        }
 
         return;
       }
@@ -254,6 +308,7 @@ export class InfiniteCanvas {
 
       this.draggingShape = null;
       this.draggingStartPos = null;
+      this.rotatingShape = null;
       this.resizingShape = null;
       this.resizeHandle = null;
       this.resizeAnchor = null;
@@ -458,6 +513,19 @@ export class InfiniteCanvas {
     }
   }
 
+  _renderRotationHandles(obj) {
+    const screenPos = this.camera.worldToScreen(obj.x, obj.y);
+    const screenW = obj.w * this.camera.zoom;
+    const screenH = obj.h * this.camera.zoom;
+    const handleX = screenPos.x + screenW / 2;
+    const handleY = screenPos.y - 20;
+
+    this.ctx.beginPath();
+    this.ctx.arc(handleX, handleY, 6, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#ffffff";
+    this.ctx.fill();
+  }
+
   _renderShape(obj) {
     const { ctx, camera } = this;
     const screenPos = camera.worldToScreen(obj.x, obj.y);
@@ -475,10 +543,23 @@ export class InfiniteCanvas {
     }
 
     switch (obj.type) {
-      case "rectangle":
+      case "rectangle": {
         ctx.fillStyle = obj.color;
         ctx.fillRect(screenPos.x, screenPos.y, screenW, screenH);
         break;
+      }
+
+      case "circle": {
+        const cx = screenPos.x + screenW / 2;
+        const cy = screenPos.y + screenH / 2;
+        const radius = screenW / 2;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = obj.color;
+        ctx.fill();
+        break;
+      }
     }
 
     if (obj.selected) {
@@ -492,6 +573,7 @@ export class InfiniteCanvas {
         screenH + 4,
       );
       this._renderResizeHandles(obj);
+      this._renderRotationHandles(obj);
     }
 
     ctx.restore();
@@ -501,6 +583,21 @@ export class InfiniteCanvas {
     const objects = Array.from(this.objects.values());
     for (let i = objects.length - 1; i >= 0; i--) {
       const obj = objects[i];
+
+      if (obj.type === "circle") {
+        const cx = obj.x + obj.w / 2;
+        const cy = obj.y + obj.h / 2;
+        const radius = obj.w / 2;
+
+        const dx = worldX - cx;
+        const dy = worldY - cy;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq <= radius * radius) {
+          return obj;
+        }
+        continue;
+      }
 
       if (
         worldX >= obj.x &&
@@ -550,6 +647,45 @@ export class InfiniteCanvas {
         }
       }
     }
+    return null;
+  }
+
+  _hitRotationHandle(worldX, worldY) {
+    for (const obj of this.objects.values()) {
+      if (!obj.selected) continue;
+
+      const screenPos = this.camera.worldToScreen(obj.x, obj.y);
+      const screenW = obj.w * this.camera.zoom;
+      const screenH = obj.h * this.camera.zoom;
+
+      const centerX = screenPos.x + screenW / 2;
+      const centerY = screenPos.y + screenH / 2;
+
+      const handleX = centerX;
+      const handleY = screenPos.y - 20;
+
+      const dx = handleX - centerX;
+      const dy = handleY - centerY;
+
+      const cos = Math.cos(obj.rotation);
+      const sin = Math.sin(obj.rotation);
+
+      const rotatedHandleX = centerX + dx * cos - dy * sin;
+
+      const rotatedHandleY = centerY + dx * sin + dy * cos;
+
+      const mouseScreenPos = this.camera.worldToScreen(worldX, worldY);
+
+      const mouseDx = mouseScreenPos.x - rotatedHandleX;
+      const mouseDy = mouseScreenPos.y - rotatedHandleY;
+
+      const distance = Math.sqrt(mouseDx * mouseDx + mouseDy * mouseDy);
+
+      if (distance <= 10) {
+        return obj;
+      }
+    }
+
     return null;
   }
 
